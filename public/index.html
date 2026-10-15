@@ -1,0 +1,167 @@
+﻿<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Khung Chat Thời Gian Thực (Demo Socket.IO)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 15px; }
+    .chat-container { background: #ffffff; width: 100%; max-width: 600px; height: 85vh; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); display: flex; flex-direction: column; overflow: hidden; }
+    .chat-header { background: #0084ff; color: #fff; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+    .header-top { display: flex; justify-content: space-between; align-items: center; }
+    .room-badge { background: rgba(255,255,255,0.25); padding: 4px 10px; border-radius: 20px; font-size: 13px; }
+    .config-bar { display: flex; gap: 10px; }
+    .config-bar input { flex: 1; padding: 6px 10px; border: none; border-radius: 6px; font-size: 13px; outline: none; }
+    .config-bar button { padding: 6px 12px; border: none; background: #0056b3; color: white; border-radius: 6px; cursor: pointer; font-weight: bold; }
+    .messages-box { flex: 1; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; background: #fafafa; }
+    .msg-item { display: flex; flex-direction: column; max-width: 75%; }
+    .msg-item.mine { align-self: flex-end; }
+    .msg-item.other { align-self: flex-start; }
+    .msg-author { font-size: 11px; color: #888; margin-bottom: 3px; }
+    .msg-bubble { padding: 10px 14px; border-radius: 14px; font-size: 14px; word-break: break-word; }
+    .mine .msg-bubble { background: #0084ff; color: white; border-bottom-right-radius: 2px; }
+    .other .msg-bubble { background: #e4e6eb; color: #050505; border-bottom-left-radius: 2px; }
+    .msg-time { font-size: 10px; opacity: 0.7; margin-top: 4px; text-align: right; }
+    .typing-status { font-size: 12px; color: #777; font-style: italic; min-height: 16px; padding: 0 16px 6px; }
+    .chat-input-area { display: flex; padding: 12px; background: #fff; border-top: 1px solid #eee; gap: 8px; }
+    .chat-input-area input { flex: 1; padding: 12px 14px; border: 1px solid #ddd; border-radius: 24px; outline: none; font-size: 14px; }
+    .chat-input-area button { background: #0084ff; color: white; border: none; padding: 0 20px; border-radius: 24px; font-weight: bold; cursor: pointer; }
+    .chat-input-area button:hover { background: #006bce; }
+  </style>
+</head>
+<body>
+  <div class="chat-container">
+    <div class="chat-header">
+      <div class="header-top">
+        <h3 id="chatTitle">💬 Real-time Chat</h3>
+        <span class="room-badge" id="statusBadge">Phòng: general</span>
+      </div>
+      <div class="config-bar">
+        <input type="text" id="userInput" placeholder="Tên hiển thị..." value="User_A" />
+        <input type="text" id="roomInput" placeholder="Phòng..." value="general" />
+        <button id="joinBtn">Vào phòng</button>
+      </div>
+    </div>
+
+    <div class="messages-box" id="messagesBox"></div>
+    <div class="typing-status" id="typingStatus"></div>
+
+    <form class="chat-input-area" id="chatForm">
+      <input type="text" id="messageInput" placeholder="Nhập tin nhắn..." autocomplete="off" />
+      <button type="submit">Gửi</button>
+    </form>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const messagesBox = document.getElementById('messagesBox');
+    const messageInput = document.getElementById('messageInput');
+    const chatForm = document.getElementById('chatForm');
+    const userInput = document.getElementById('userInput');
+    const roomInput = document.getElementById('roomInput');
+    const joinBtn = document.getElementById('joinBtn');
+    const statusBadge = document.getElementById('statusBadge');
+    const typingStatus = document.getElementById('typingStatus');
+
+    let currentRoom = roomInput.value.trim() || 'general';
+    let currentUser = userInput.value.trim() || 'User_' + Math.floor(Math.random() * 1000);
+    userInput.value = currentUser;
+
+    // Tải lịch sử tin nhắn qua REST API
+    async function loadHistory(room) {
+      try {
+        const res = await fetch(`/api/messages/${room}`);
+        const data = await res.json();
+        messagesBox.innerHTML = '';
+        if (Array.isArray(data)) {
+          data.forEach(msg => appendMessage(msg));
+        }
+      } catch (err) {
+        console.error('Lỗi khi tải lịch sử:', err);
+      }
+    }
+
+    function appendMessage(msg) {
+      const isMine = msg.sender === currentUser;
+      const item = document.createElement('div');
+      item.className = `msg-item ${isMine ? 'mine' : 'other'}`;
+      
+      const timeStr = new Date(msg.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      item.innerHTML = `
+        <div class="msg-author">${isMine ? 'Bạn' : msg.senderName}</div>
+        <div class="msg-bubble">${escapeHtml(msg.content)}</div>
+        <div class="msg-time">${timeStr}</div>
+      `;
+      messagesBox.appendChild(item);
+      messagesBox.scrollTop = messagesBox.scrollHeight;
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.innerText = text;
+      return div.innerHTML;
+    }
+
+    // Tham gia phòng
+    function joinCurrentRoom() {
+      currentUser = userInput.value.trim() || 'Anonymous';
+      currentRoom = roomInput.value.trim() || 'general';
+      statusBadge.innerText = `Phòng: ${currentRoom}`;
+      socket.emit('join_room', currentRoom);
+      loadHistory(currentRoom);
+    }
+
+    joinBtn.addEventListener('click', joinCurrentRoom);
+
+    // Gửi tin nhắn qua Socket
+    chatForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const content = messageInput.value.trim();
+      if (!content) return;
+
+      socket.emit('send_message', {
+        room: currentRoom,
+        sender: currentUser,
+        senderName: currentUser,
+        content: content
+      });
+
+      socket.emit('stop_typing', { room: currentRoom, userName: currentUser });
+      messageInput.value = '';
+    });
+
+    // Lắng nghe tin nhắn mới nhận được từ Socket server
+    socket.on('receive_message', (msg) => {
+      if (msg.room === currentRoom) {
+        appendMessage(msg);
+      }
+    });
+
+    // Typing event
+    let typingTimeout;
+    messageInput.addEventListener('input', () => {
+      socket.emit('typing', { room: currentRoom, userName: currentUser });
+      clearTimeout(typingTimeout);
+      typingTimeout = setTimeout(() => {
+        socket.emit('stop_typing', { room: currentRoom, userName: currentUser });
+      }, 1000);
+    });
+
+    socket.on('user_typing', ({ userName }) => {
+      typingStatus.innerText = `${userName} đang soạn tin...`;
+    });
+
+    socket.on('user_stop_typing', () => {
+      typingStatus.innerText = '';
+    });
+
+    // Khởi tạo lần đầu
+    socket.on('connect', () => {
+      joinCurrentRoom();
+    });
+  </script>
+</body>
+</html>
